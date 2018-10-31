@@ -7,6 +7,9 @@ The format is based on [keep a changelog](http://keepachangelog.com) and this pr
 ### Changed
 - Improved error handling in Lua runtime custom SQL function calls.
 
+### Fixed
+- Correctly support arbitrary database schema names that may contain special characters.
+
 ## [2.1.2] - 2018-10-25
 ### Added
 - Ensure runtime environment values are exposed through the Go runtime InitModule context.
