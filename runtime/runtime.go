@@ -12,6 +12,61 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+/*
+Package runtime is an API to interact with the embedded Runtime environment in Nakama.
+
+The game server includes support to develop native code in Go with the plugin package from the Go stdlib.
+It's used to enable compiled shared objects to be loaded by the game server at startup.
+
+The Go runtime support can be used to develop authoritative multiplayer match handlers,
+RPC functions, hook into messages processed by the server, and extend the server withany other custom logic.
+It offers the same capabilities as the Lua runtime support but has the advantage that any package from the Go ecosystem can be used.
+
+Here's the smallest example of a Go module written with the server runtime.
+
+	package main
+
+	import (
+	  "context"
+	  "database/sql"
+	  "log"
+
+	  "github.com/heroiclabs/nakama/runtime"
+	)
+
+	func InitModule(ctx context.Context, logger *log.Logger, db *sql.DB, nk runtime.NakamaModule, initializer runtime.Initializer) error {
+	  logger.Println("module loaded")
+	  return nil
+	}
+
+On server start, Nakama scans the module directory folder (https://heroiclabs.com/docs/runtime-code-basics/#load-modules).
+If it finds a shared object file (*.so), it attempts to open the file as a plugin and initialize it by running the InitModule function.
+This function is guaranteed to ever be invoked once during the uptime of the server.
+
+To setup your own project to build modules for the game server you can follow these steps.
+
+1. Build Nakama from source:
+	go get -d github.com/heroiclabs/nakama
+	cd $GOPATH/src/github.com/heroiclabs/nakama
+	env CGO_ENABLED=1 go build
+
+2. Setup a folder for your own server code:
+	mkdir -p $GOPATH/src/some_project
+	cd $GOPATH/src/some_project
+
+3. Build your plugin as a shared object:
+	go build --buildmode=plugin -o ./modules/some_project.so
+
+NOTE: It is not possible to build plugins on Windows with the native compiler toolchain but they can be cross-compiled and run with Docker.
+
+4. Start Nakama with your module:
+	$GOPATH/src/github.com/heroiclabs/nakama/nakama --runtime.path $GOPATH/src/plugin_project/modules
+
+TIP: You don't have to install Nakama from source but you still need to have the `api`, `rtapi` and `runtime` packages from Nakama on your `GOPATH`. Heroic Labs also offers a docker plugin-builder image that streamlines the plugin workflow.
+
+For more information about the Go runtime have a look at the docs:
+https://heroiclabs.com/docs/runtime-code-basics
+*/
 package runtime
 
 import (
@@ -24,34 +79,83 @@ import (
 )
 
 const (
-	RUNTIME_CTX_ENV              = "env"
-	RUNTIME_CTX_MODE             = "execution_mode"
-	RUNTIME_CTX_QUERY_PARAMS     = "query_params"
-	RUNTIME_CTX_USER_ID          = "user_id"
-	RUNTIME_CTX_USERNAME         = "username"
+	// All available environmental variables made available to the runtime environment.
+	// This is useful to store API keys and other secrets which may be different between servers run in production and in development.
+	//   envs := ctx.Value(runtime.RUNTIME_CTX_ENV).(map[string]string)
+	// This can always be safely cast into a `map[string]string`.
+	RUNTIME_CTX_ENV = "env"
+
+	// The mode associated with the execution context. It's one of these values:
+	//  "run_once", "rpc", "before", "after", "match", "matchmaker", "leaderboard_reset", "tournament_reset", "tournament_end".
+	RUNTIME_CTX_MODE = "execution_mode"
+
+	// Query params that was passed through from HTTP request.
+	RUNTIME_CTX_QUERY_PARAMS = "query_params"
+
+	// The user ID associated with the execution context.
+	RUNTIME_CTX_USER_ID = "user_id"
+
+	// The username associated with the execution context.
+	RUNTIME_CTX_USERNAME = "username"
+
+	// The user session expiry in seconds associated with the execution context.
 	RUNTIME_CTX_USER_SESSION_EXP = "user_session_exp"
-	RUNTIME_CTX_SESSION_ID       = "session_id"
-	RUNTIME_CTX_CLIENT_IP        = "client_ip"
-	RUNTIME_CTX_CLIENT_PORT      = "client_port"
-	RUNTIME_CTX_MATCH_ID         = "match_id"
-	RUNTIME_CTX_MATCH_NODE       = "match_node"
-	RUNTIME_CTX_MATCH_LABEL      = "match_label"
-	RUNTIME_CTX_MATCH_TICK_RATE  = "match_tick_rate"
+
+	// The user session associated with the execution context.
+	RUNTIME_CTX_SESSION_ID = "session_id"
+
+	// The IP address of the client making the request.
+	RUNTIME_CTX_CLIENT_IP = "client_ip"
+
+	// The port number of the client making the request.
+	RUNTIME_CTX_CLIENT_PORT = "client_port"
+
+	// The match ID that is currently being executed. Only applicable to server authoritative multiplayer.
+	RUNTIME_CTX_MATCH_ID = "match_id"
+
+	// The node ID that the match is being executed on. Only applicable to server authoritative multiplayer.
+	RUNTIME_CTX_MATCH_NODE = "match_node"
+
+	// Labels associated with the match. Only applicable to server authoritative multiplayer.
+	RUNTIME_CTX_MATCH_LABEL = "match_label"
+
+	// Tick rate defined for this match. Only applicable to server authoritative multiplayer.
+	RUNTIME_CTX_MATCH_TICK_RATE = "match_tick_rate"
 )
 
+/*
+Error is used to indicate a failure in code. The message and code are returned to the client.
+If an Error is used as response for a HTTP/gRPC request, then the server tries to use the error value as the gRPC error code. This will in turn translate to HTTP status codes.
+
+For more information, please have a look at the following:
+	https://github.com/grpc/grpc-go/blob/master/codes/codes.go
+	https://github.com/grpc-ecosystem/grpc-gateway/blob/master/runtime/errors.go
+	https://golang.org/pkg/net/http/
+*/
 type Error struct {
 	Message string
 	Code    int
 }
 
+// Error returns the encapsulated error message.
 func (e *Error) Error() string {
 	return e.Message
 }
 
+/*
+NewError returns a new error. The message and code are sent directly to the client. The code field is also optionally translated to gRPC/HTTP code.
+	runtime.NewError("Server unavailable", 14) // 14 = Unavailable = 503 HTTP status code
+*/
 func NewError(message string, code int) *Error {
 	return &Error{Message: message, Code: code}
 }
 
+/*
+Initializer is used to register various callback functions with the server.
+It is made available to the InitModule function as an input parameter when the function is invoked by the server when loading the module on server start.
+
+NOTE: You must not cache the reference to this and reuse it as a later point as this could have unintended side effects.
+*/
 type Initializer interface {
 	RegisterRpc(id string, fn func(ctx context.Context, logger *log.Logger, db *sql.DB, nk NakamaModule, payload string) (string, error)) error
 
