@@ -27,16 +27,32 @@ Here's the smallest example of a Go module written with the server runtime.
 	package main
 
 	import (
-	  "context"
-	  "database/sql"
-	  "log"
+		"context"
+		"database/sql"
+		"log"
 
-	  "github.com/heroiclabs/nakama/runtime"
+		"github.com/heroiclabs/nakama/runtime"
 	)
 
 	func InitModule(ctx context.Context, logger *log.Logger, db *sql.DB, nk runtime.NakamaModule, initializer runtime.Initializer) error {
-	  logger.Println("module loaded")
-	  return nil
+		if err := initializer.RegisterRpc("get_time", getServerTime); err != nil {
+			return err
+		}
+		logger.Println("module loaded")
+		return nil
+	}
+
+	func getServerTime(ctx context.Context, logger *log.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
+		serverTime := map[string]int64 {
+			"time": time.Now().UTC().Unix(),
+		}
+
+		response, err := json.Marshal(serverTime)
+		if err != nil {
+			logger.Printf("failed to marshal response: %v", response)
+			return "", errors.New("internal error; see logs")
+		}
+		return string(response), nil
 	}
 
 On server start, Nakama scans the module directory folder (https://heroiclabs.com/docs/runtime-code-basics/#load-modules).
@@ -157,29 +173,89 @@ It is made available to the InitModule function as an input parameter when the f
 NOTE: You must not cache the reference to this and reuse it as a later point as this could have unintended side effects.
 */
 type Initializer interface {
+
+	/*
+		RegisterRpc registers a function with the given ID. This ID can be used within client code to send an RPC message to
+		execute the function and return the result. Results are always returned as a JSON string (or optionally empty string).
+
+		If there is an issue with the RPC call, return an empty string and the associated error which will be returned to the client.
+	*/
 	RegisterRpc(id string, fn func(ctx context.Context, logger *log.Logger, db *sql.DB, nk NakamaModule, payload string) (string, error)) error
 
+	/*
+		RegisterBeforeRt registers a function for a message. The registered function will be called after the message has been processed in the pipeline.
+		The custom code will be executed asynchronously after the response message has been sent to a client
+
+		Message names can be found here: https://heroiclabs.com/docs/runtime-code-basics/#message-names
+	*/
 	RegisterBeforeRt(id string, fn func(ctx context.Context, logger *log.Logger, db *sql.DB, nk NakamaModule, envelope *rtapi.Envelope) (*rtapi.Envelope, error)) error
+
+	/*
+		RegisterAfterRt registers a function with for a message. Any function may be registered to intercept a message received from a client and operate on it (or reject it) based on custom logic.
+		This is useful to enforce specific rules on top of the standard features in the server.
+
+		You can return `nil` instead of the `rtapi.Envelope` and this will disable disable that particular server functionality.
+
+		Message names can be found here: https://heroiclabs.com/docs/runtime-code-basics/#message-names
+	*/
 	RegisterAfterRt(id string, fn func(ctx context.Context, logger *log.Logger, db *sql.DB, nk NakamaModule, envelope *rtapi.Envelope) error) error
 
+	// RegisterBeforeGetAccount is used to register a function invoked when the server receives the relevant request.
 	RegisterBeforeGetAccount(fn func(ctx context.Context, logger *log.Logger, db *sql.DB, nk NakamaModule) error) error
+
+	// RegisterAfterGetAccount is used to register a function invoked after the server processes the relevant request.
 	RegisterAfterGetAccount(fn func(ctx context.Context, logger *log.Logger, db *sql.DB, nk NakamaModule, out *api.Account) error) error
+
+	// RegisterBeforeUpdateAccount is used to register a function invoked when the server receives the relevant request.
 	RegisterBeforeUpdateAccount(fn func(ctx context.Context, logger *log.Logger, db *sql.DB, nk NakamaModule, in *api.UpdateAccountRequest) (*api.UpdateAccountRequest, error)) error
+
+	// RegisterAfterUpdateAccount is used to register a function invoked after the server processes the relevant request.
 	RegisterAfterUpdateAccount(fn func(ctx context.Context, logger *log.Logger, db *sql.DB, nk NakamaModule, in *api.UpdateAccountRequest) error) error
+
+	// RegisterBeforeAuthenticateCustom can be used to perform pre-authentication checks.
+	// You can use this to process the input (such as decoding custom tokens) and ensure inter-compatibility between Nakama and your own custom system.
 	RegisterBeforeAuthenticateCustom(fn func(ctx context.Context, logger *log.Logger, db *sql.DB, nk NakamaModule, in *api.AuthenticateCustomRequest) (*api.AuthenticateCustomRequest, error)) error
+
+	// RegisterAfterAuthenticateCustom can be used to perform after successful authentication checks.
+	// For instance, you can run special logic if the account was just created like adding them to newcomers leaderboard.
 	RegisterAfterAuthenticateCustom(fn func(ctx context.Context, logger *log.Logger, db *sql.DB, nk NakamaModule, out *api.Session, in *api.AuthenticateCustomRequest) error) error
+
+	// RegisterBeforeAuthenticateDevice can be used to perform pre-authentication checks.
 	RegisterBeforeAuthenticateDevice(fn func(ctx context.Context, logger *log.Logger, db *sql.DB, nk NakamaModule, in *api.AuthenticateDeviceRequest) (*api.AuthenticateDeviceRequest, error)) error
+
+	// RegisterAfterAuthenticateDevice can be used to perform after successful authentication checks.
 	RegisterAfterAuthenticateDevice(fn func(ctx context.Context, logger *log.Logger, db *sql.DB, nk NakamaModule, out *api.Session, in *api.AuthenticateDeviceRequest) error) error
+
+	// RegisterBeforeAuthenticateEmail can be used to perform pre-authentication checks.
 	RegisterBeforeAuthenticateEmail(fn func(ctx context.Context, logger *log.Logger, db *sql.DB, nk NakamaModule, in *api.AuthenticateEmailRequest) (*api.AuthenticateEmailRequest, error)) error
+
+	// RegisterAfterAuthenticateEmail can be used to perform after successful authentication checks.
 	RegisterAfterAuthenticateEmail(fn func(ctx context.Context, logger *log.Logger, db *sql.DB, nk NakamaModule, out *api.Session, in *api.AuthenticateEmailRequest) error) error
+
+	// RegisterBeforeAuthenticateFacebook can be used to perform pre-authentication checks.
 	RegisterBeforeAuthenticateFacebook(fn func(ctx context.Context, logger *log.Logger, db *sql.DB, nk NakamaModule, in *api.AuthenticateFacebookRequest) (*api.AuthenticateFacebookRequest, error)) error
+
+	// RegisterAfterAuthenticateFacebook can be used to perform after successful authentication checks.
 	RegisterAfterAuthenticateFacebook(fn func(ctx context.Context, logger *log.Logger, db *sql.DB, nk NakamaModule, out *api.Session, in *api.AuthenticateFacebookRequest) error) error
+
+	// RegisterBeforeAuthenticateGameCenter can be used to perform pre-authentication checks.
 	RegisterBeforeAuthenticateGameCenter(fn func(ctx context.Context, logger *log.Logger, db *sql.DB, nk NakamaModule, in *api.AuthenticateGameCenterRequest) (*api.AuthenticateGameCenterRequest, error)) error
+
+	// RegisterAfterAuthenticateGameCenter can be used to perform after successful authentication checks.
 	RegisterAfterAuthenticateGameCenter(fn func(ctx context.Context, logger *log.Logger, db *sql.DB, nk NakamaModule, out *api.Session, in *api.AuthenticateGameCenterRequest) error) error
+
+	// RegisterBeforeAuthenticateGoogle can be used to perform pre-authentication checks.
 	RegisterBeforeAuthenticateGoogle(fn func(ctx context.Context, logger *log.Logger, db *sql.DB, nk NakamaModule, in *api.AuthenticateGoogleRequest) (*api.AuthenticateGoogleRequest, error)) error
+
+	// RegisterAfterAuthenticateGoogle can be used to perform after successful authentication checks.
 	RegisterAfterAuthenticateGoogle(fn func(ctx context.Context, logger *log.Logger, db *sql.DB, nk NakamaModule, out *api.Session, in *api.AuthenticateGoogleRequest) error) error
+
+	// RegisterBeforeAuthenticateSteam can be used to perform pre-authentication checks.
 	RegisterBeforeAuthenticateSteam(fn func(ctx context.Context, logger *log.Logger, db *sql.DB, nk NakamaModule, in *api.AuthenticateSteamRequest) (*api.AuthenticateSteamRequest, error)) error
+
+	// RegisterAfterAuthenticateSteam can be used to perform after successful authentication checks.
 	RegisterAfterAuthenticateSteam(fn func(ctx context.Context, logger *log.Logger, db *sql.DB, nk NakamaModule, out *api.Session, in *api.AuthenticateSteamRequest) error) error
+
 	RegisterBeforeListChannelMessages(fn func(ctx context.Context, logger *log.Logger, db *sql.DB, nk NakamaModule, in *api.ListChannelMessagesRequest) (*api.ListChannelMessagesRequest, error)) error
 	RegisterAfterListChannelMessages(fn func(ctx context.Context, logger *log.Logger, db *sql.DB, nk NakamaModule, out *api.ChannelMessageList, in *api.ListChannelMessagesRequest) error) error
 	RegisterBeforeListFriends(fn func(ctx context.Context, logger *log.Logger, db *sql.DB, nk NakamaModule) error) error
