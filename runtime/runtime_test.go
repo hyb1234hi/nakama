@@ -152,7 +152,7 @@ func ExampleInitializer_registerBeforeAuthenticateCustom() {
 
 	err := initializer.RegisterBeforeAuthenticateCustom(func(ctx context.Context, logger *log.Logger, db *sql.DB, nk NakamaModule, in *api.AuthenticateCustomRequest) (*api.AuthenticateCustomRequest, error) {
 		username := in.GetUsername()
-		uncoolNames := []string{"novabyte", "zyro", "shawshank", "anton-chigurh"} // notice no 'mofirouz' or 'bourne' since they're awesome!
+		uncoolNames := []string{"novabyte", "zyro", "shawshank", "anton-chigurh"} // notice no 'mofirouz' or 'bourne' since he's awesome (they are synonyms)!
 
 		for _, badWord := range uncoolNames {
 			if strings.Contains(username, badWord) {
